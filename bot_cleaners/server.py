@@ -2,7 +2,7 @@ import random
 
 import mesa
 
-from .model import Habitacion, RobotLimpieza, Celda, Mueble
+from .model import Habitacion, RobotLimpieza, Celda, Mueble, Carga
 
 MAX_NUMBER_ROBOTS = 20
 
@@ -19,6 +19,9 @@ def agent_portrayal(agent):
         if agent.sucia:
             portrayal["Color"] = "white"
             portrayal["text"] = "🦠"
+        elif agent.es_estacion_carga:  
+            portrayal["Color"] = "black"
+            portrayal["text"] = "🔋"
         else:
             portrayal["Color"] = "white"
             portrayal["text"] = ""
@@ -70,5 +73,5 @@ model_params = {
 
 server = mesa.visualization.ModularServer(
     Habitacion, [grid, chart_celdas],
-    "botCleaner", model_params, 8521
+    "botCleaner", model_params, 8522
 )
