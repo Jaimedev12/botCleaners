@@ -23,12 +23,17 @@ class Carga(Agent):
         super().__init__(unique_id, model)
     
 class RobotLimpieza(Agent):
+
+    max_carga = 1000
+
     def __init__(self, unique_id, model):
         super().__init__(unique_id, model)
         self.sig_pos = None
         self.movimientos = 0
-        self.carga = 100
+        self.carga = self.max_carga
         self.apartada = False
+        self.celda_objetivo = None
+        self.current_path_visited_dict = dict()
 
     def calc_dist(self, p1, p2):
         return abs(p1[0] - p2[0]) + abs(p1[1] - p2[1])
@@ -38,7 +43,7 @@ class RobotLimpieza(Agent):
         celda_a_limpiar.sucia = False
         self.sig_pos = celda_a_limpiar.pos
 
-    def sucia_bfs(self):
+    def find_closest_tile(self, is_valid):
         queue = deque()
         queue.append(self.pos)
         visited = dict()
@@ -48,7 +53,6 @@ class RobotLimpieza(Agent):
             cur_pos = queue.popleft()
 
             if cur_pos in visited:
-                print("Visited")
                 continue
 
             visited[cur_pos] = True
@@ -56,27 +60,30 @@ class RobotLimpieza(Agent):
                 cur_pos, moore=True, include_center=False)
         
             for vecino in vecinos:
-                if isinstance(vecino, Celda) and vecino.sucia:
-                    return vecino.pos
+                if is_valid(vecino):
+                    return vecino
 
                 if not isinstance(vecino, (Mueble, RobotLimpieza)):
                     queue.append(vecino.pos)
-        
-        return 0
 
+        # Si ya no hay suciedad
+        # Regresa la celda en la que está
+
+        agentes_pos_actual = self.model.grid.get_cell_list_contents([self.pos])
+        celda_actual = next(filter(lambda agente: isinstance(agente, Celda), agentes_pos_actual), self)
+        return celda_actual
 
     def obtener_celda_sucia_mas_cercana(self):
-        return self.sucia_bfs()
+        return self.find_closest_tile(lambda vecino : isinstance(vecino, Celda) and vecino.sucia)
+        #return self.sucia_bfs()
 
     def obtener_prioridad_de_vecinos(self, vecinos, posicion_destino):
-        
         prioridades = []
         for vecino in vecinos:
             vecino_con_prioridad = (self.calc_dist(vecino.pos, posicion_destino), vecino)
             prioridades.append(vecino_con_prioridad)
 
         prioridades.sort(key=lambda x: x[0])
-        print(prioridades)
 
         for i in range(len(vecinos)):
             vecinos[i] = prioridades[i][1]
@@ -84,21 +91,20 @@ class RobotLimpieza(Agent):
         return vecinos
     
     def seleccionar_nueva_pos(self, lista_de_vecinos):
-        pos_sucia_mas_cercana = self.obtener_celda_sucia_mas_cercana()
-        print(str(self.unique_id), ": ",  pos_sucia_mas_cercana)
 
-        vecinos = self.model.grid.get_neighbors(
-                self.pos, moore=True, include_center=False)
+        if len(lista_de_vecinos) == 0:
+            self.sig_pos = self.pos
+            return
 
-        vecinos_con_prioridad = self.obtener_prioridad_de_vecinos(vecinos, pos_sucia_mas_cercana)
+        # Ver si la celda a la que queremos ir, sigue sucia
+        if not (isinstance(self.celda_objetivo, Celda) and self.celda_objetivo.sucia):
+            self.celda_objetivo = self.obtener_celda_sucia_mas_cercana()
+
+
+        vecinos_con_prioridad = self.obtener_prioridad_de_vecinos(lista_de_vecinos, self.celda_objetivo.pos)
         
-        for vecino in vecinos_con_prioridad:
-            if not isinstance(vecino, (Mueble, RobotLimpieza)):
-                self.sig_pos = vecino.pos
-                return
+        self.sig_pos = vecinos_con_prioridad[0].pos
 
-        # print("celda sucia: ", celda_sucia_mas_cercana)
-        self.sig_pos = self.random.choice(lista_de_vecinos).pos
 
     @staticmethod
     def buscar_celdas_sucia(lista_de_vecinos):
@@ -114,7 +120,7 @@ class RobotLimpieza(Agent):
 
     def step(self):
         #Checar cuanta pila tiene
-        if self.carga <= 25:
+        if self.carga <= -1:
             self.mover_a_carga()
 
         else: 
@@ -122,15 +128,17 @@ class RobotLimpieza(Agent):
                 self.pos, moore=True, include_center=False)
 
             for vecino in vecinos:
-                if isinstance(vecino, (Mueble, RobotLimpieza)):
+                if isinstance(vecino, (Mueble, RobotLimpieza)) or (vecino.pos in self.current_path_visited_dict):
                     vecinos.remove(vecino)
 
             celdas_sucias = self.buscar_celdas_sucia(vecinos)
 
             if len(celdas_sucias) == 0:
                 self.seleccionar_nueva_pos(vecinos)
+                self.current_path_visited_dict[self.sig_pos] = True
             else:
                 self.limpiar_una_celda(celdas_sucias)
+                self.current_path_visited_dict = dict()
 
     def mover_a_carga(self):
         # Encuentra la estación de carga más cercana y se mueve hacia ella
@@ -146,16 +154,16 @@ class RobotLimpieza(Agent):
             self.carga -= 1
             self.model.grid.move_agent(self, self.sig_pos)
 
-        if isinstance(self.model.grid.get_cell_list_contents(self.pos), Carga):
+        if isinstance(self.model.grid.get_cell_list_contents([self.pos]), Carga):
             self.carga += 25
-            self.carga = min(self.carga, 100)
+            self.carga = min(self.carga, self.max_carga)
 
 
 class Habitacion(Model):
     def __init__(self, M: int, N: int,
                  num_agentes: int = 5,
                  porc_celdas_sucias: float = 0.6,
-                 porc_muebles: float = 0.1,
+                 porc_muebles: float = 0.4,
                  modo_pos_inicial: str = 'Fija',
                  ):
 
