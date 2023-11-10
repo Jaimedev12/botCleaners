@@ -22,6 +22,8 @@ def agent_portrayal(agent):
         elif agent.es_estacion_carga:  
             portrayal["Color"] = "black"
             portrayal["text"] = "🔋"
+        elif agent.is_apartada:
+            portrayal["Color"] = "red"
         else:
             portrayal["Color"] = "white"
             portrayal["text"] = ""

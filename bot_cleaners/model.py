@@ -9,10 +9,11 @@ from collections import deque
 import numpy as np
 
 class Celda(Agent):
-    def __init__(self, unique_id, model, suciedad: bool = False, es_estacion_carga: bool = False):
+    def __init__(self, unique_id, model, suciedad: bool = False, es_estacion_carga: bool = False, is_apartada: bool = False):
         super().__init__(unique_id, model)
         self.sucia = suciedad
         self.es_estacion_carga = es_estacion_carga
+        self.is_apartada = is_apartada
 
 class Mueble(Agent):
     def __init__(self, unique_id, model):
@@ -24,7 +25,7 @@ class Carga(Agent):
     
 class RobotLimpieza(Agent):
 
-    max_carga = 1000
+    max_carga = 100
 
     def __init__(self, unique_id, model):
         super().__init__(unique_id, model)
@@ -34,6 +35,7 @@ class RobotLimpieza(Agent):
         self.apartada = False
         self.celda_objetivo = None
         self.current_path_visited_dict = dict()
+        self.necesita_carga = False
 
     def calc_dist(self, p1, p2):
         return abs(p1[0] - p2[0]) + abs(p1[1] - p2[1])
@@ -49,7 +51,6 @@ class RobotLimpieza(Agent):
         visited = dict()
 
         while queue:
-
             cur_pos = queue.popleft()
 
             if cur_pos in visited:
@@ -67,14 +68,10 @@ class RobotLimpieza(Agent):
                     queue.append(vecino.pos)
 
         # Si ya no hay suciedad
-        # Regresa la celda en la que está
-
-        agentes_pos_actual = self.model.grid.get_cell_list_contents([self.pos])
-        celda_actual = next(filter(lambda agente: isinstance(agente, Celda), agentes_pos_actual), self)
-        return celda_actual
+        return 0
 
     def obtener_celda_sucia_mas_cercana(self):
-        return self.find_closest_tile(lambda vecino : isinstance(vecino, Celda) and vecino.sucia)
+        return self.find_closest_tile(lambda celda : isinstance(celda, Celda) and celda.sucia)
         #return self.sucia_bfs()
 
     def obtener_prioridad_de_vecinos(self, vecinos, posicion_destino):
@@ -91,7 +88,6 @@ class RobotLimpieza(Agent):
         return vecinos
     
     def seleccionar_nueva_pos(self, lista_de_vecinos):
-
         if len(lista_de_vecinos) == 0:
             self.sig_pos = self.pos
             return
@@ -100,64 +96,99 @@ class RobotLimpieza(Agent):
         if not (isinstance(self.celda_objetivo, Celda) and self.celda_objetivo.sucia):
             self.celda_objetivo = self.obtener_celda_sucia_mas_cercana()
 
+        self.mover_hacia_celda_objetivo(lista_de_vecinos)
+
+
+    def mover_hacia_celda_objetivo(self, lista_de_vecinos):
+        if self.celda_objetivo == 0:
+            self.sig_pos = self.pos
+            return
 
         vecinos_con_prioridad = self.obtener_prioridad_de_vecinos(lista_de_vecinos, self.celda_objetivo.pos)
-        
-        self.sig_pos = vecinos_con_prioridad[0].pos
+        if len(vecinos_con_prioridad) > 0:
+            self.sig_pos = vecinos_con_prioridad[0].pos
+        else :
+            self.sig_pos = self.pos
 
+    def apartar_pos(self, pos):
+        agentes_en_pos = self.model.grid.get_cell_list_contents([pos])
+        celda_en_pos = filter(lambda agente : isinstance(agente, Celda), agentes_en_pos)
+        for celda in celda_en_pos:
+            celda.is_apartada = True
+
+    def liberar_pos(self, pos):
+        agentes_en_pos = self.model.grid.get_cell_list_contents([pos])
+        celda_en_pos = filter(lambda agente : isinstance(agente, Celda), agentes_en_pos)
+        for celda in celda_en_pos:
+            celda.is_apartada = False
 
     @staticmethod
     def buscar_celdas_sucia(lista_de_vecinos):
-        # #Opción 1
-        # return [vecino for vecino in lista_de_vecinos
-        #                 if isinstance(vecino, Celda) and vecino.sucia]
-        # #Opción 2
-        celdas_sucias = list()
-        for vecino in lista_de_vecinos:
-            if isinstance(vecino, Celda) and vecino.sucia:
-                celdas_sucias.append(vecino)
-        return celdas_sucias
+        return [vecino for vecino in lista_de_vecinos if isinstance(vecino, Celda) and vecino.sucia]
+
 
     def step(self):
+        vecinos = self.model.grid.get_neighbors(
+            self.pos, moore=True, include_center=False)
+        
+        # Marcar posiciones bloqueadas
+        coordenadas_bloqueadas = set()
+        for vecino in vecinos:
+            if (isinstance(vecino, (Mueble, RobotLimpieza))  # Es robot o mueble
+               or (vecino.pos in self.current_path_visited_dict) # Ya se visitó en el recorrido actual
+               or (isinstance(vecino, Celda) and vecino.is_apartada)): # Ya está apartada la celda                
+                coordenadas_bloqueadas.add(vecino.pos)
+
+        # Quitar todos los agentes de las posiciones bloqueadas
+        vecinos_permitidos = [vecino for vecino in vecinos if vecino.pos not in coordenadas_bloqueadas]
+
         #Checar cuanta pila tiene
-        if self.carga <= -1:
-            self.mover_a_carga()
-
+        if self.carga <= 25 and not self.necesita_carga:
+            self.necesita_carga = True
+            self.mover_a_carga(vecinos_permitidos)
         else: 
-            vecinos = self.model.grid.get_neighbors(
-                self.pos, moore=True, include_center=False)
+            celdas_sucias_alrededor = self.buscar_celdas_sucia(vecinos_permitidos)
 
-            for vecino in vecinos:
-                if isinstance(vecino, (Mueble, RobotLimpieza)) or (vecino.pos in self.current_path_visited_dict):
-                    vecinos.remove(vecino)
-
-            celdas_sucias = self.buscar_celdas_sucia(vecinos)
-
-            if len(celdas_sucias) == 0:
-                self.seleccionar_nueva_pos(vecinos)
+            if len(celdas_sucias_alrededor) == 0:
+                self.seleccionar_nueva_pos(vecinos_permitidos)
                 self.current_path_visited_dict[self.sig_pos] = True
             else:
-                self.limpiar_una_celda(celdas_sucias)
+                self.limpiar_una_celda(celdas_sucias_alrededor)
                 self.current_path_visited_dict = dict()
 
-    def mover_a_carga(self):
-        # Encuentra la estación de carga más cercana y se mueve hacia ella
-        estaciones_de_carga = [agent for agent in self.model.schedule.agents if isinstance(agent, Carga)]
-        estacion_mas_cercana = min(estaciones_de_carga, key=lambda est: self.calc_dist(self.pos, est.pos))
-        self.sig_pos = estacion_mas_cercana.pos
+        self.apartar_pos(self.sig_pos)
+
+    def mover_a_carga(self, lista_de_vecinos):
+        if self.necesita_carga:
+            # Comprobar si ya está completamente cargado
+            if self.carga >= self.max_carga:
+                self.necesita_carga = False
+                self.celda_objetivo = None  # No hay objetivo actual
+            else:
+                estacion_carga_mas_cercana = self.find_closest_tile(lambda celda: isinstance(celda, Celda) and celda.es_estacion_carga)
+                if estacion_carga_mas_cercana:
+                    self.celda_objetivo = estacion_carga_mas_cercana
+                    self.mover_hacia_celda_objetivo(lista_de_vecinos)
+                    #self.sig_pos = estacion_carga_mas_cercana.pos
+                    self.necesita_carga = True  # Necesita llegar a la estación de carga
    
     def advance(self):
         if self.pos != self.sig_pos:
-            self.movimientos += 1
+            self.liberar_pos(self.pos)
+            self.movimientos += 1    
 
-        if self.carga > 0:
-            self.carga -= 1
-            self.model.grid.move_agent(self, self.sig_pos)
+        if self.necesita_carga and isinstance(self.model.grid.get_cell_list_contents([self.pos]), Carga):
+            self.carga += 25  # Cargar en la estación
+            self.carga = min(self.carga, self.max_carga)
+        else:
+            self.carga -= 1  
+            self.carga = max(self.carga, 0)
 
+        self.model.grid.move_agent(self, self.sig_pos)
+        
         if isinstance(self.model.grid.get_cell_list_contents([self.pos]), Carga):
             self.carga += 25
             self.carga = min(self.carga, self.max_carga)
-
 
 class Habitacion(Model):
     def __init__(self, M: int, N: int,
