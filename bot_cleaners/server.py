@@ -19,11 +19,11 @@ def agent_portrayal(agent):
         if agent.sucia:
             portrayal["Color"] = "white"
             portrayal["text"] = "🦠"
+        elif agent.is_apartada:
+            portrayal["Color"] = "red"
         elif agent.es_estacion_carga:  
             portrayal["Color"] = "black"
             portrayal["text"] = "🔋"
-        elif agent.is_apartada:
-            portrayal["Color"] = "red"
         else:
             portrayal["Color"] = "white"
             portrayal["text"] = ""
@@ -32,11 +32,25 @@ def agent_portrayal(agent):
 
 grid = mesa.visualization.CanvasGrid(
     agent_portrayal, 20, 20, 400, 400)
+
 chart_celdas = mesa.visualization.ChartModule(
     [{"Label": "CeldasSucias", "Color": '#36A2EB', "label": "Celdas Sucias"}],
     50, 200,
     data_collector_name="datacollector"
 )
+
+chart_movimientos = mesa.visualization.ChartModule(
+    [{"Label": "Movimientos", "Color": '#36A2EB', "label": "Total de Movimientos"}],
+    50, 200, 
+    data_collector_name="datacollector"
+)
+
+chart_recargas = mesa.visualization.ChartModule(
+    [{"Label": "Recargas", "Color": '#36A2EB', "label": "Total de Recargas"}],
+    50, 200, 
+    data_collector_name="datacollector"
+)
+
 
 model_params = {
     "num_agentes": mesa.visualization.Slider(
@@ -59,7 +73,7 @@ model_params = {
         "Porcentaje de Muebles",
         0.1,
         0.0,
-        0.25,
+        0.20,
         0.01,
         description="Selecciona el porcentaje de muebles",
     ),
@@ -74,6 +88,6 @@ model_params = {
 }
 
 server = mesa.visualization.ModularServer(
-    Habitacion, [grid, chart_celdas],
+    Habitacion, [grid, chart_celdas, chart_movimientos, chart_recargas],
     "botCleaner", model_params, 8522
 )

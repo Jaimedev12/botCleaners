@@ -26,8 +26,6 @@ class Carga(Agent):
 class RobotLimpieza(Agent):
 
     max_carga = 100
-    charge_rate = 25
-    charge_limit = 40
 
     def __init__(self, unique_id, model):
         super().__init__(unique_id, model)
@@ -38,8 +36,6 @@ class RobotLimpieza(Agent):
         self.celda_objetivo = None
         self.current_path_visited_dict = dict()
         self.necesita_carga = False
-        self.is_cargando = False
-        self.num_recargas = 0
 
     def calc_dist(self, p1, p2):
         return abs(p1[0] - p2[0]) + abs(p1[1] - p2[1])
@@ -48,12 +44,6 @@ class RobotLimpieza(Agent):
         celda_a_limpiar = self.random.choice(lista_de_celdas_sucias)
         celda_a_limpiar.sucia = False
         self.sig_pos = celda_a_limpiar.pos
-
-    def dont_move(self):
-        self.sig_pos = self.pos
-
-    # def.move_random(self, lista_vecinos) :
-
 
     def find_closest_tile(self, is_valid):
         queue = deque()
@@ -99,7 +89,7 @@ class RobotLimpieza(Agent):
     
     def seleccionar_nueva_pos(self, lista_de_vecinos):
         if len(lista_de_vecinos) == 0:
-            self.dont_move()
+            self.sig_pos = self.pos
             return
 
         # Ver si la celda a la que queremos ir, sigue sucia
@@ -111,14 +101,14 @@ class RobotLimpieza(Agent):
 
     def mover_hacia_celda_objetivo(self, lista_de_vecinos):
         if self.celda_objetivo == 0:
-            self.dont_move()
+            self.sig_pos = self.pos
             return
 
         vecinos_con_prioridad = self.obtener_prioridad_de_vecinos(lista_de_vecinos, self.celda_objetivo.pos)
         if len(vecinos_con_prioridad) > 0:
             self.sig_pos = vecinos_con_prioridad[0].pos
         else :
-            self.dont_move()
+            self.sig_pos = self.pos
 
     def apartar_pos(self, pos):
         agentes_en_pos = self.model.grid.get_cell_list_contents([pos])
@@ -138,10 +128,6 @@ class RobotLimpieza(Agent):
 
 
     def step(self):
-        if self.carga == 0:
-            self.dont_move()
-            return
-
         vecinos = self.model.grid.get_neighbors(
             self.pos, moore=True, include_center=False)
         
@@ -157,7 +143,8 @@ class RobotLimpieza(Agent):
         vecinos_permitidos = [vecino for vecino in vecinos if vecino.pos not in coordenadas_bloqueadas]
 
         #Checar cuanta pila tiene
-        if self.carga <= self.charge_limit or self.is_cargando:
+        if self.carga <= 25 and not self.necesita_carga:
+            self.necesita_carga = True
             self.mover_a_carga(vecinos_permitidos)
         else: 
             celdas_sucias_alrededor = self.buscar_celdas_sucia(vecinos_permitidos)
@@ -172,33 +159,18 @@ class RobotLimpieza(Agent):
         self.apartar_pos(self.sig_pos)
 
     def mover_a_carga(self, lista_de_vecinos):
-
-        if self.is_cargando:
-            self.carga = min(self.carga+self.charge_rate, self.max_carga)
-
+        if self.necesita_carga:
             # Comprobar si ya está completamente cargado
             if self.carga >= self.max_carga:
-                self.is_cargando = False
-                self.num_recargas += 1
-                print("sumó recargas")
-                print(self.num_recargas)
-                self.seleccionar_nueva_pos(lista_de_vecinos)
-                # self.celda_objetivo = None  # No hay objetivo actual
+                self.necesita_carga = False
+                self.celda_objetivo = None  # No hay objetivo actual
             else:
-                self.dont_move()
-
-            return
-        
-        estacion_carga_mas_cercana = self.find_closest_tile(lambda celda: isinstance(celda, Celda) and celda.es_estacion_carga)
-
-        if estacion_carga_mas_cercana.pos == self.pos:
-            self.is_cargando = True
-            self.dont_move()
-        else:
-            self.celda_objetivo = estacion_carga_mas_cercana
-            self.mover_hacia_celda_objetivo(lista_de_vecinos)
-            #self.sig_pos = estacion_carga_mas_cercana.pos
-            self.necesita_carga = True  # Necesita llegar a la estación de carga
+                estacion_carga_mas_cercana = self.find_closest_tile(lambda celda: isinstance(celda, Celda) and celda.es_estacion_carga)
+                if estacion_carga_mas_cercana:
+                    self.celda_objetivo = estacion_carga_mas_cercana
+                    self.mover_hacia_celda_objetivo(lista_de_vecinos)
+                    #self.sig_pos = estacion_carga_mas_cercana.pos
+                    self.necesita_carga = True  # Necesita llegar a la estación de carga
    
     def advance(self):
         if self.pos != self.sig_pos:
@@ -222,7 +194,7 @@ class Habitacion(Model):
     def __init__(self, M: int, N: int,
                  num_agentes: int = 5,
                  porc_celdas_sucias: float = 0.6,
-                 porc_muebles: float = 0.1,
+                 porc_muebles: float = 0.4,
                  modo_pos_inicial: str = 'Fija',
                  ):
 
@@ -279,8 +251,8 @@ class Habitacion(Model):
             self.schedule.add(robot)
 
         self.datacollector = DataCollector(
-            model_reporters={"Grid": get_grid, "Recargas": get_recargas,
-                             "CeldasSucias": get_sucias, "Movimientos": get_movimientos},
+            model_reporters={"Grid": get_grid, "Cargas": get_cargas,
+                             "CeldasSucias": get_sucias},
         )
 
     def next_id(self):
@@ -318,15 +290,9 @@ def get_grid(model: Model) -> np.ndarray:
     return grid
 
 
-def get_recargas(model: Model) -> int:
-    sum_recargas = 0
-    for cell in model.grid.coord_iter():
-        cell_content, pos = cell
-        for obj in cell_content:
-            if isinstance(obj, RobotLimpieza):
-                sum_recargas += obj.num_recargas
+def get_cargas(model: Model):
+    return [(agent.unique_id, agent.carga) for agent in model.schedule.agents]
 
-    return sum_recargas
 
 def get_sucias(model: Model) -> int:
     """
@@ -340,17 +306,11 @@ def get_sucias(model: Model) -> int:
         for obj in cell_content:
             if isinstance(obj, Celda) and obj.sucia:
                 sum_sucias += 1
-    
     return sum_sucias / model.num_celdas_sucias
 
-def get_movimientos(model: Model) -> int:
-    sum_movimientos = 0
-    for cell in model.grid.coord_iter():
-        cell_content, pos = cell
-        for obj in cell_content:
-            if isinstance(obj, RobotLimpieza):
-                sum_movimientos += obj.movimientos
 
-    return sum_movimientos
-
-
+def get_movimientos(agent: Agent) -> dict:
+    if isinstance(agent, RobotLimpieza):
+        return {agent.unique_id: agent.movimientos}
+    # else:
+    #    return 0
